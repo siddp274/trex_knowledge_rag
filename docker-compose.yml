@@ -1,0 +1,36 @@
+version: "3.9"
+
+services:
+  # ── Vector DB ─────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: trex-qdrant
+    ports:
+      - "6333:6333"   # REST API
+      - "6334:6334"   # gRPC
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY:-my_api_key}
+    restart: unless-stopped
+
+  # ── Graph DB ──────────────────────────────────────────
+  neo4j:
+    image: neo4j:5-community
+    container_name: trex-neo4j
+    ports:
+      - "7474:7474"   # Browser UI
+      - "7687:7687"   # Bolt
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    environment:
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-Shivjeet1}
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+    restart: unless-stopped
+
+volumes:
+  qdrant_data:
+  neo4j_data:
+  neo4j_logs:
