@@ -215,6 +215,11 @@ venv
 
 # design MDs
 youtube_mcp_trex.md
+azure_setup.md
 
 # notwithstanding data
 ingestion/data
+
+node_modules
+package-lock.json
+package.json

@@ -50,7 +50,7 @@ from indexing.indexer import index_into_qdrant
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s — %(message)s")
 logger = logging.getLogger("trex_mcp")
 
-TRANSCRIPT_DIR = "/Users/siddp278/Desktop/projects/graphRAG/ingestion/data"
+TRANSCRIPT_DIR = f"{PROJECT_ROOT}/ingestion/data"
 
 logger.info("TREX MCP ready")
 
