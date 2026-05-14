@@ -1,7 +1,7 @@
 """
-Query Step 5: Generate the final answer with GPT-4o.
+Query Step 4: Generate the final answer with GPT-4o.
 
-Takes the assembled context (passages + graph) and the user's question,
+Takes the assembled context (passages) and the user's question,
 produces a grounded answer with passage citations.
 
 This is the only step that uses the expensive query model (GPT-4o).
@@ -11,33 +11,20 @@ One GPT-4o call per user query — that's the cost model.
 import logging
 from openai import OpenAI
 
-import os
-import sys
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
-print(f"Current dir: {CURRENT_DIR} and project root: {PROJECT_ROOT}")
-
-if PROJECT_ROOT not in sys.path:
-    sys.path.append(PROJECT_ROOT)
-
 from config import TREXConfig
 
 logger = logging.getLogger(__name__)
 
 ANSWER_SYSTEM_PROMPT = """You are an expert research assistant with access to a structured knowledge base.
 
-You will be given:
-1. Retrieved document passages — some are raw text chunks (Level 0), 
-   some are higher-level thematic summaries from a RAPTOR tree (Level 1-2).
-2. A knowledge graph context showing entities and their relationships.
+You will be given retrieved document passages — some are raw text chunks (Level 0), 
+some are higher-level thematic summaries from a RAPTOR tree (Level 1-2).
 
 Your task: answer the user's question accurately and completely.
 
 Rules:
-- Draw on ALL provided context — both passages and graph context
+- Draw on ALL provided passages
 - Cite specific passages where relevant: [Passage 1], [Passage 3]
-- Use the knowledge graph to identify key actors, relationships, and structure
 - If the context is insufficient to fully answer, say so clearly
 - Do not make up facts not supported by the context
 - Write in clear, professional prose
@@ -52,11 +39,14 @@ class AnswerGenerator:
         self.config = config
         self.client = OpenAI(base_url=config.openai_query_endpoint, api_key=config.openai_query_api_key)
 
-    def generate(
-        self,
-        question: str,
-        assembled_context: dict,
-    ) -> dict:
+    def _build_context_data(self, assembled_context: dict) -> str:
+        """Format the passages section for the system prompt."""
+        passages_text = assembled_context.get("passages_text", "")
+        if passages_text:
+            return f"## Retrieved Passages\n\n{passages_text}"
+        return ""
+
+    def generate(self, question: str, assembled_context: dict) -> dict:
         """
         Generate an answer grounded in the retrieved context.
         
@@ -66,21 +56,13 @@ class AnswerGenerator:
                 "model": str,
                 "context_tokens": int,
                 "passages_used": int,
+                "prompt_tokens": int,
+                "completion_tokens": int,
             }
         """
-        passages_text = assembled_context.get("passages_text", "")
-        graph_text = assembled_context.get("graph_text", "")
-
-        # Build the context section
-        context_parts = []
-        if passages_text:
-            context_parts.append(f"## Retrieved Passages\n\n{passages_text}")
-        if graph_text:
-            context_parts.append(f"\n\n{graph_text}")
-
-        context_data = "\n\n".join(context_parts)
-
-        system_prompt = ANSWER_SYSTEM_PROMPT.format(context_data=context_data)
+        system_prompt = ANSWER_SYSTEM_PROMPT.format(
+            context_data=self._build_context_data(assembled_context)
+        )
 
         response = self.client.chat.completions.create(
             model=self.config.query_model,
@@ -113,17 +95,9 @@ class AnswerGenerator:
         Streaming version — yields answer tokens as they arrive.
         Use this for real-time UX.
         """
-        passages_text = assembled_context.get("passages_text", "")
-        graph_text = assembled_context.get("graph_text", "")
-
-        context_parts = []
-        if passages_text:
-            context_parts.append(f"## Retrieved Passages\n\n{passages_text}")
-        if graph_text:
-            context_parts.append(f"\n\n{graph_text}")
-
-        context_data = "\n\n".join(context_parts)
-        system_prompt = ANSWER_SYSTEM_PROMPT.format(context_data=context_data)
+        system_prompt = ANSWER_SYSTEM_PROMPT.format(
+            context_data=self._build_context_data(assembled_context)
+        )
 
         stream = self.client.chat.completions.create(
             model=self.config.query_model,
@@ -136,6 +110,5 @@ class AnswerGenerator:
         )
 
         for chunk in stream:
-            delta = chunk.choices[0].delta.content
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content

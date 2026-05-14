@@ -28,7 +28,7 @@ Raw Documents (PDF, HTML, CSV, TXT)
   → Summarize (GPT-4.1-mini)            entities + relationships
   → Repeat (max 2 levels)                         │
   → Tree nodes at L0, L1, L2                      ▼
-        │                                    [Neo4j Graph]
+        │                                    [Neo4j Graph - removed implementation]
         ▼                                    Nodes = Entities
 [Qdrant Hybrid Index]                        Edges = Relationships
   Dense vectors (text-embedding-3-small)
@@ -41,7 +41,7 @@ User Question
         │
         ├─────────────────────────────┐
         ▼                             ▼
-[Qdrant Hybrid Search]         [Neo4j Entity Lookup]
+[Qdrant Hybrid Search]         [Neo4j Entity Lookup - removed]
   Dense + BM25 → RRF fusion     Extract entities from query
   Returns top-K tree nodes       → fetch neighborhood graph
         │                             │
@@ -958,7 +958,7 @@ docker-compose up -d
 | **Keyword search** | Qdrant BM25 sparse vectors via FastEmbed | Native Qdrant support; no separate Elasticsearch needed |
 | **RRF fusion** | Qdrant built-in hybrid mode | Qdrant applies RRF internally when `RetrievalMode.HYBRID` is set — no manual implementation needed |
 | **Tree truncation** | `max_tree_levels=2` | Mirrors TREX paper — 2 levels gives 90% of quality at ~30% of full RAPTOR cost |
-| **Neo4j role** | Entity + relationship graph | Adds GraphRAG-style relational reasoning on top of TREX's tree retrieval |
+| **Neo4j role (removed implenetation)** | Entity + relationship graph | Adds GraphRAG-style relational reasoning on top of TREX's tree retrieval |
 | **Soft clustering threshold** | `0.5` | From RAPTOR paper — a chunk must have >50% probability of belonging to a cluster to be included |
 | **LangChain version** | 1.2.15 | Stable 1.x line; no breaking changes until 2.0; Python 3.10+ required |
 | **`api_key` vs `openai_api_key`** | `api_key` | Pydantic v2 field name in `langchain-openai` 0.4+ — old name is deprecated |

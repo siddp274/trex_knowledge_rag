@@ -38,8 +38,8 @@ class TextUnitEmbedder:
     def __init__(self, config: TREXConfig):
         self.config = config
         self.client = OpenAI(
-            base_url = config.openai_embedder_api_endpoint,
-            api_key = config.openai_embedder_api_key,
+            base_url=config.openai_embedder_api_endpoint,
+            api_key=config.openai_embedder_api_key,
         )
         self.model = config.embedding_model
         self.batch_size = config.embedding_batch_size
@@ -58,8 +58,7 @@ class TextUnitEmbedder:
 
         for i in range(0, len(texts), self.batch_size):
             batch = texts[i : i + self.batch_size]
-            batch_embeddings = self._embed_batch_with_retry(batch)
-            all_embeddings.extend(batch_embeddings)
+            all_embeddings.extend(self._embed_batch_with_retry(batch))
 
             if (i + self.batch_size) % 500 == 0 or i + self.batch_size >= len(texts):
                 logger.info(
@@ -95,7 +94,6 @@ class TextUnitEmbedder:
                     model=self.model,
                     input=texts,
                 )
-                # Response comes back sorted by index, but let's be safe
                 sorted_data = sorted(response.data, key=lambda x: x.index)
                 return [item.embedding for item in sorted_data]
 
@@ -107,15 +105,7 @@ class TextUnitEmbedder:
                     f"Retrying in {backoff:.1f}s..."
                 )
                 time.sleep(backoff)
-                backoff *= 2  # exponential backoff
-
-    def estimate_cost(self, text_units: list[TextUnit]) -> float:
-        """
-        Estimate embedding cost in USD.
-        text-embedding-3-small: $0.02 per 1M tokens.
-        """
-        total_tokens = sum(tu.n_tokens for tu in text_units)
-        return total_tokens * 0.02 / 1_000_000
+                backoff *= 2
 
 
 def embed_text_units(
@@ -137,18 +127,12 @@ def embed_text_units(
     """
     embedder = TextUnitEmbedder(config)
 
-    # Cost estimate before we start
-    est_cost = embedder.estimate_cost(text_units)
-    logger.info(f"[Embed] Embedding {len(text_units)} text units")
-    logger.info(f"[Embed] Estimated cost: ${est_cost:.4f}")
+    total_tokens = sum(tu.n_tokens for tu in text_units)
+    est_cost = total_tokens * 0.02 / 1_000_000
+    logger.info(f"[Embed] Embedding {len(text_units)} text units (~{total_tokens:,} tokens, est. ${est_cost:.4f})")
 
-    # Extract texts — use the metadata-prepended `text` field
-    texts = [tu.text for tu in text_units]
+    embeddings = embedder.embed_texts([tu.text for tu in text_units])
 
-    # Batch embed
-    embeddings = embedder.embed_texts(texts)
-
-    # Attach embeddings back to TextUnits
     for tu, emb in zip(text_units, embeddings):
         tu.embedding = emb
 

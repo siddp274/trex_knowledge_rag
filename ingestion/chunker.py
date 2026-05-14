@@ -9,7 +9,9 @@ Key difference from LangChain's RecursiveCharacterTextSplitter:
 """
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+import json
+from openai import OpenAI
+from typing import Any, Optional
 
 import tiktoken
 
@@ -19,9 +21,9 @@ class ChunkingConfig:
     """
     Mirrors GraphRAG's ChunkingConfig (Pydantic → dataclass for simplicity).
     """
-    size: int = 1200
+    size: int = 1000
 
-    overlap: int = 100
+    overlap: int = 150
 
     encoding_model: str = "cl100k_base"
     """Tiktoken encoding. cl100k_base is used by text-embedding-3-small and GPT-4 family models."""
@@ -68,14 +70,14 @@ class TokenChunker:
     def chunk(
         self,
         text: str,
-        transform: Callable[[str], str] | None = None,
+        set_transform: Optional[bool] = True,
     ) -> list[dict[str, Any]]:
         """
         Split text into token-based chunks.
         
         Args:
             text: The full document text to chunk.
-            transform: Optional function applied to each chunk's text
+            set_transform: Whether to apply the transformation
                        (e.g., prepend metadata). Applied AFTER splitting
                        so metadata doesn't eat into chunk boundaries,
                        but the transformed text is what gets embedded
@@ -89,18 +91,21 @@ class TokenChunker:
 
         raw_chunks = self._split_on_tokens(text)
         results = []
-
+        transform = build_transformer(doc=text, enrich_fn=enrich_chunk, 
+                                      count_tokens_fn=self.count_tokens)
+        
         for i, chunk_text in enumerate(raw_chunks):
-            original = chunk_text
-            if transform:
-                chunk_text = transform(chunk_text)
-
-            results.append({
+            transform_chunk = {
                 "text": chunk_text,
-                "original_text": original,
+                "original_text": chunk_text,
                 "n_tokens": self.count_tokens(chunk_text),
                 "index": i,
-            })
+            }
+            if set_transform:
+                transform_chunk = transform(chunk_text)
+                transform_chunk["index"] = i
+
+            results.append(transform_chunk)
 
         return results
 
@@ -137,30 +142,90 @@ class TokenChunker:
 
         return result
 
+# Building custom, not GraphRAG
+# Note, transform is applied after chunking, but context can be document scoped.
+def enrich_chunk(doc:str, text: str) -> dict[str, Any]:
 
-def add_metadata_transformer(
-    metadata: dict[str, Any],
-    delimiter: str = ": ",
-    line_delimiter: str = ".\n",
-) -> Callable[[str], str]:
-    """
-    Creates a transform function that prepends metadata to chunk text.
-    Adopted from GraphRAG's transformers.add_metadata().
-    
-    Example:
-        transformer = add_metadata_transformer({"title": "Q4 Report", "date": "2024-12"})
-        transformer("Revenue grew 15%...")
-        → "title: Q4 Report.\ndate: 2024-12.\nRevenue grew 15%..."
-    
-    Why this matters:
-        Without metadata, a chunk saying "Revenue grew 15%" is ambiguous —
-        which company? which quarter? Prepending "title: Q4 Earnings Report"
-        gives the entity extractor and embedder critical grounding context.
-    """
-    def transformer(text: str) -> str:
-        metadata_str = line_delimiter.join(
-            f"{k}{delimiter}{v}" for k, v in metadata.items()
-        ) + line_delimiter
-        return metadata_str + text
+    system_prompt = """
+You are given a document and a chunk from it. Your task is to generate a contextual representation of the chunk.
+Return ONLY valid JSON (no markdown, no explanation).
 
-    return transformer
+Schema:
+{
+  "context": "string (50–100 tokens explaining what the chunk is about and its role in the document)",
+  "document_section": "string (section or subsection name) if not present create your own based on the content",
+  "chunk_role": "string (definition | evidence | conclusion | example | argument | other)",
+  "entities": List["string"]
+}
+
+Rules:
+- context must make the chunk self-contained for retrieval
+- do not copy chunk verbatim
+- extract only entities explicitly implied in chunk or present in the document.
+"""
+
+    user_prompt = f"""Document: {doc} Chunk:{text}"""
+    client = OpenAI()
+    response = client.chat.completions.create(
+        model="gpt-4.1-nano",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0.1,
+    )
+    try:
+        return json.loads(response.choices[0].message.content)
+    except json.JSONDecodeError:
+        return {
+            "context": "json parsing failed, returning empty context",
+            "document_section": "parsing failed",
+            "chunk_role": "",
+            "entities": []
+        }
+
+
+def build_transformer(
+    doc:str,
+    enrich_fn: Callable[[str, str], dict[str, Any]],
+    count_tokens: Callable[[str], int],
+):
+    """
+    enrich_fn: LLM function that returns structured context
+    count_tokens: tokenizer function
+    """
+
+    def transform_chunk(text: str, index: int) -> dict[str, Any]:
+
+        # 1. Get structured enrichment from LLM
+        enrichment = enrich_fn(doc, text)
+
+        context = enrichment.get("context", "")
+        section = enrichment.get("document_section", "")
+        role = enrichment.get("chunk_role", "")
+        entities = enrichment.get("entities", [])
+
+        # 2. Build embedding text (Anthropic-style)
+        embedding_text = (
+            f"Section: {section}\n"
+            f"Role: {role}\n"
+            f"Entities: {', '.join(entities)}\n\n"
+            f"{context}\n\n"
+            f"{text}"
+        ).strip()
+
+        # 3. Final unified chunk object
+        return {
+            "text": embedding_text,
+            "original_text": text,
+            "n_tokens": count_tokens(embedding_text),
+            "index": index,
+
+            # enriched metadata (flat, as you want)
+            "context": context,
+            "document_section": section,
+            "chunk_role": role,
+            "entities": entities,
+        }
+
+    return transform_chunk

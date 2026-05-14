@@ -25,21 +25,11 @@ Why this matters for retrieval:
   that flat vector search can't do.
 """
 import logging
-import time
+import tiktoken
 from typing import Any
 
 import numpy as np
 from openai import OpenAI
-
-import os
-import sys
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
-print(f"Current dir: {CURRENT_DIR} and project root: {PROJECT_ROOT}")
-
-if PROJECT_ROOT not in sys.path:
-    sys.path.append(PROJECT_ROOT)
 
 from config import TREXConfig
 from ingestion.text_unit import TextUnit
@@ -48,6 +38,8 @@ from store.embedder import TextUnitEmbedder
 from raptor.clustering import reduce_dimensions, find_optimal_k, soft_cluster
 
 logger = logging.getLogger(__name__)
+
+_TIKTOKEN_ENCODER = tiktoken.get_encoding("cl100k_base")
 
 SUMMARIZATION_PROMPT = """You are an expert research analyst.
 Your task is to produce a dense, informative summary of the following text passages.
@@ -136,10 +128,8 @@ class RaptorTreeBuilder:
         4. Summarize each cluster → new TextUnit
         5. Embed each summary
         """
-        # --- Collect embeddings ---
         embeddings = np.array([node.embedding for node in nodes])
 
-        # --- UMAP dimensionality reduction ---
         # Level 1: 10D (fine-grained topics within a document)
         # Level 2: 2D (broad themes across documents)
         n_components = (
@@ -149,20 +139,16 @@ class RaptorTreeBuilder:
         n_neighbors = min(15, len(nodes) - 1)
         if len(nodes) <= n_components + 1 or n_neighbors < 2:
             logger.info(f"[RAPTOR] Level {level}: Too few nodes ({len(nodes)}) for UMAP. Treating as single cluster.")
-            # Skip clustering — summarize everything as one cluster
             reduced = None
         else:
             reduced = reduce_dimensions(embeddings, n_components=n_components, n_neighbors=n_neighbors)
 
-        # --- Find optimal cluster count ---
         if reduced is None:
             cluster_assignments = {0: list(range(len(nodes)))}
         else:
-            # --- Soft cluster ---
             k = find_optimal_k(reduced, max_k=min(self.config.max_clusters, len(nodes) - 1))
             cluster_assignments = soft_cluster(reduced, k=k, threshold=self.config.cluster_threshold)
 
-        # --- Summarize each cluster ---
         summary_nodes = []
 
         for cluster_idx, member_indices in cluster_assignments.items():
@@ -171,25 +157,19 @@ class RaptorTreeBuilder:
 
             member_nodes = [nodes[i] for i in member_indices]
 
-            # Build combined text for summarization
             # Use original_text (without prepended metadata) to avoid
             # repetitive "title: X" lines in the summary input
             combined_text = "\n\n---\n\n".join(
                 node.original_text for node in member_nodes
             )
 
-            # LLM summarization
             summary_text = self._summarize(combined_text)
             if not summary_text:
                 continue
 
-            # Embed the summary
             summary_embedding = self.embedder.embed_single(summary_text)
-
-            # Build the summary TextUnit
             summary_id = gen_sha512_hash({"text": summary_text}, ["text"])
 
-            # Source: inherit from the majority source in the cluster
             source_counts: dict[str, int] = {}
             for node in member_nodes:
                 source_counts[node.source] = source_counts.get(node.source, 0) + 1
@@ -202,23 +182,17 @@ class RaptorTreeBuilder:
                 document_id=member_nodes[0].document_id,
                 source=primary_source,
                 title=f"Level-{level} Summary",
-                n_tokens=self.embedder.config.chunk_size,  # approximate
+                n_tokens=len(_TIKTOKEN_ENCODER.encode(summary_text)),
                 level=level,
-                parent_id=None,             # filled if Level 3+ existed
+                parent_id=None,
                 children_ids=[node.id for node in member_nodes],
                 entity_ids=None,
                 relationship_ids=None,
                 embedding=summary_embedding,
             )
 
-            # Recount tokens accurately
-            import tiktoken
-            enc = tiktoken.get_encoding("cl100k_base")
-            summary_node.n_tokens = len(enc.encode(summary_text))
-
             summary_nodes.append(summary_node)
 
-            # Link children → parent
             for node in member_nodes:
                 node.parent_id = summary_node.id
 
@@ -234,8 +208,6 @@ class RaptorTreeBuilder:
         Truncates input if it exceeds model context. GPT-4.1-mini supports
         1M tokens so this is rarely hit, but defensive coding is good.
         """
-        # Rough truncation safety — keep under 100K tokens
-        # (text is already chunked, so clusters are typically 5K-30K tokens)
         max_chars = 400000  # ~100K tokens at ~4 chars/token
         if len(text) > max_chars:
             text = text[:max_chars] + "\n\n[... truncated for length ...]"

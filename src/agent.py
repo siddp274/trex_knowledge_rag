@@ -20,7 +20,6 @@ import argparse
 import asyncio
 import logging
 import os
-import sys
 import uuid
 from typing import Optional
 from dotenv import load_dotenv
@@ -82,11 +81,30 @@ running the full pipeline, unless the user explicitly wants to add new content.
 """
 
 async def build_agent(
-    mcp_server_script: str = "trex_mcp_server.py",
+    trex_mcp_server_script: str = "trex_mcp_server.py",
+    scraper_mcp_server_script: str = "scraper_server.py",
     mcp_http_url: Optional[str] = None,
     model_name: str = "gpt-4o",
+    server_config_override: Optional[dict] = None,
 ):
-    if mcp_http_url:
+    """
+    Build and return the LangGraph agent with MCP tools loaded.
+
+    Args:
+        trex_mcp_server_script: Path to the TREX MCP server script (stdio transport).
+        scraper_mcp_server_script: Path to the scraper MCP server script (stdio transport).
+        mcp_http_url: URL of a running MCP HTTP server (overrides script).
+        model_name: OpenAI model for the agent.
+        server_config_override: Full server config dict for MultiServerMCPClient.
+            When provided, mcp_server_script and mcp_http_url are ignored.
+            Used by api.py to wire both the trex and scraper MCP servers.
+
+    Returns:
+        (agent, mcp_client, memory)
+    """
+    if server_config_override:
+        server_config = server_config_override
+    elif mcp_http_url:
         server_config = {
             "trex": {
                 "url": mcp_http_url,
@@ -96,8 +114,13 @@ async def build_agent(
     else:
         server_config = {
             "trex": {
-                "command": "/Users/siddp278/Desktop/projects/trex_knowledge_rag/trex_knowledge_rag/venv/bin/python", 
-                "args": [mcp_server_script],
+                "command": os.getenv("MCP_SCRIPT"),
+                "args": [trex_mcp_server_script],
+                "transport": "stdio",
+            },
+            "scraper": {
+                "command": os.getenv("MCP_SCRIPT"),
+                "args": [scraper_mcp_server_script],
                 "transport": "stdio",
             }
         }
@@ -107,10 +130,12 @@ async def build_agent(
 
     logger.info("Loaded %d MCP tools: %s", len(tools), [t.name for t in tools])
 
-    llm = ChatOpenAI(model=model_name, 
-                    temperature=0,
-                    api_key=os.getenv("OPENAI_QUERY_API_KEY"),
-                    base_url=os.getenv("OPENAI_ENDPOINT"))
+    llm = ChatOpenAI(
+        model=model_name,
+        temperature=0,
+        api_key=os.getenv("OPENAI_API_KEY"),
+        base_url=os.getenv("OPENAI_ENDPOINT"),
+    )
     memory = MemorySaver()
 
     agent = create_agent(
@@ -124,14 +149,16 @@ async def build_agent(
 
 
 async def chat_loop(
-    mcp_server_script: str = "trex_mcp_server.py",
+    trex_mcp_server_script: str = "trex_mcp_server.py",
+    scraper_mcp_server_script: str = "scraper_server.py",
     mcp_http_url: Optional[str] = None,
     model_name: str = "gpt-4o",
 ):
     """Run an interactive terminal chat with the agent."""
 
     agent, mcp_client, memory = await build_agent(
-        mcp_server_script=mcp_server_script,
+        trex_mcp_server_script=trex_mcp_server_script,
+        scraper_mcp_server_script=scraper_mcp_server_script,
         mcp_http_url=mcp_http_url,
         model_name=model_name,
     )
@@ -166,12 +193,10 @@ async def chat_loop(
                 version="v2",
             ):
                 kind = event.get("event")
-                # Print LLM text tokens as they arrive
                 if kind == "on_chat_model_stream":
                     chunk = event.get("data", {}).get("chunk")
                     if chunk and hasattr(chunk, "content") and chunk.content:
                         print(chunk.content, end="", flush=True)
-                # Print tool call info
                 elif kind == "on_tool_start":
                     tool_name = event.get("name", "unknown")
                     print(f"\n  [calling {tool_name}…]", flush=True)
@@ -179,35 +204,12 @@ async def chat_loop(
                     tool_name = event.get("name", "unknown")
                     print(f"  [{tool_name} done]", flush=True)
 
-            print("\n") 
+            print("\n")
 
     finally:
         if hasattr(mcp_client, "close"):
             await mcp_client.close()
         logger.info("MCP client closed.")
-
-
-async def ask(
-    question: str,
-    agent,
-    thread_id: str = "default",
-) -> str:
-    """
-    Send a single question to the agent and return the final answer.
-
-    Useful for calling from notebooks or other scripts:
-
-        agent, client, memory = await build_agent()
-        answer = await ask("What is TREX?", agent)
-        answer2 = await ask("How does it compare to RAPTOR?", agent)  # remembers context
-    """
-    config = {"configurable": {"thread_id": thread_id}}
-    result = await agent.ainvoke(
-        {"messages": [{"role": "user", "content": question}]},
-        config=config,
-    )
-    ai_messages = [m for m in result["messages"] if m.type == "ai" and m.content]
-    return ai_messages[-1].content if ai_messages else ""
 
 
 def main():

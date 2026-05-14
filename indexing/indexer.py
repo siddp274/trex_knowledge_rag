@@ -5,7 +5,7 @@ This is the final step of the indexing pipeline. It takes ALL nodes
 (Level 0 leaves + Level 1-2 summaries) and stores them in Qdrant with:
 - Dense vectors (text-embedding-3-small, already computed in Steps 2/4)
 - Sparse vectors (BM25 via FastEmbed, computed here)
-- Rich metadata (level, parent_id, children_ids, source, entity_ids, etc.)
+- Rich metadata (level, parent_id, children_ids, source, etc.)
 
 At query time, Qdrant runs BOTH dense and sparse search simultaneously
 and fuses results with Reciprocal Rank Fusion (RRF), giving us the
@@ -16,16 +16,6 @@ from typing import Any
 
 from qdrant_client import QdrantClient, models
 from fastembed import SparseTextEmbedding
-
-import os
-import sys
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
-print(f"Current dir: {CURRENT_DIR} and project root: {PROJECT_ROOT}")
-
-if PROJECT_ROOT not in sys.path:
-    sys.path.append(PROJECT_ROOT)
 
 from config import TREXConfig
 from ingestion.text_unit import TextUnit
@@ -59,11 +49,7 @@ class QdrantIndexer:
         self.client = self.qdrant_manager.client
         self.sparse_model = SparseTextEmbedding(model_name="Qdrant/bm25")
 
-    def index_all(
-        self,
-        nodes: list[TextUnit],
-        batch_size: int = 50,
-    ):
+    def index_all(self, nodes: list[TextUnit], batch_size: int = 50):
         """
         Index all tree nodes into Qdrant.
         
@@ -71,30 +57,22 @@ class QdrantIndexer:
         - id: integer hash of the TextUnit ID (Qdrant needs int or UUID)
         - dense vector: from TextUnit.embedding
         - sparse vector: BM25 computed from TextUnit.text
-        - payload: all metadata for filtering and display at query time
+        - payload: metadata for filtering and display at query time
         """
         collection = self.config.qdrant_collection
         total = len(nodes)
 
-        logger.info(
-            f"[Qdrant] Indexing {total} nodes into '{collection}' "
-            f"(batch_size={batch_size})"
-        )
-
         level_counts = {}
         for node in nodes:
             level_counts[node.level] = level_counts.get(node.level, 0) + 1
-        logger.info(f"[Qdrant] Nodes by level: {level_counts}")
+        logger.info(f"[Qdrant] Indexing {total} nodes into '{collection}' (by level: {level_counts})")
 
         for i in range(0, total, batch_size):
             batch = nodes[i : i + batch_size]
-            points = self._build_points(batch)
-
             self.client.upsert(
                 collection_name=collection,
-                points=points,
+                points=self._build_points(batch),
             )
-
             indexed = min(i + batch_size, total)
             if indexed % 200 == 0 or indexed == total:
                 logger.info(f"[Qdrant] Indexed {indexed}/{total} nodes")
@@ -110,17 +88,12 @@ class QdrantIndexer:
         - Named sparse vector ("sparse"): BM25 from FastEmbed
         - Payload: metadata dict for filtering and retrieval
         """
-        # Compute BM25 sparse vectors for the batch
         texts = [node.text for node in batch]
         sparse_embeddings = list(self.sparse_model.embed(texts))
 
         points = []
         for node, sparse_emb in zip(batch, sparse_embeddings):
-            # Qdrant point ID: use a deterministic integer from the hash
-            # Take first 16 hex chars of SHA-512 → convert to int
             point_id = int(node.id[:16], 16)
-
-            # Build payload with all metadata
             payload = {
                 "text_unit_id": node.id,
                 "text": node.text,
@@ -131,12 +104,8 @@ class QdrantIndexer:
                 "document_id": node.document_id,
                 "parent_id": node.parent_id,
                 "children_ids": node.children_ids,
-                "entity_ids": node.entity_ids or [],
-                "relationship_ids": node.relationship_ids or [],
                 "n_tokens": node.n_tokens,
             }
-
-            # Build the point
             point = models.PointStruct(
                 id=point_id,
                 vector={
@@ -163,10 +132,7 @@ class QdrantIndexer:
         }
 
 
-def index_into_qdrant(
-    nodes: list[TextUnit],
-    config: TREXConfig,
-) -> dict[str, Any]:
+def index_into_qdrant(nodes: list[TextUnit], config: TREXConfig) -> dict[str, Any]:
     """
     Step 5 entry point.
     

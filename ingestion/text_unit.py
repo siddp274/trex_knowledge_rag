@@ -2,9 +2,7 @@
 Data model for text chunks (called TextUnits, following GraphRAG convention).
 Each TextUnit is the atomic unit that flows through the entire pipeline:
   - gets embedded (Step 2)
-  - gets entities extracted from it (Step 3)
-  - gets indexed into Qdrant (Step 6)
-  - gets linked back from Neo4j entities via MENTIONED_IN edges (Step 4)
+  - gets indexed into Qdrant (Step 3)
 """
 from dataclasses import dataclass, field
 from typing import Any
@@ -13,12 +11,11 @@ from typing import Any
 @dataclass
 class TextUnit:
     """
-    Mirrors GraphRAG's TextUnit data model with additions for our
-    RAPTOR tree structure.
-    
-    GraphRAG stores entity_ids and relationship_ids directly on each chunk
-    so you can always trace: chunk → entities it contains, and
-    entity → chunks it appears in. We adopt this pattern.
+    Core data model for a single text chunk.
+
+    Tracks provenance (source, document_id), position in the RAPTOR tree
+    (level, parent_id, children_ids), and the dense embedding used for
+    both UMAP clustering and Qdrant indexing.
     """
 
     # Deterministic SHA-512 hash of the text content. Same text always produces same ID — prevents duplicates on re-ingestion.
@@ -37,7 +34,7 @@ class TextUnit:
 
     n_tokens: int
 
-    # --- Tree structure (filled in Step 5: RAPTOR tree building) ---
+    # --- Tree structure (filled in Step 4: RAPTOR tree building) ---
     level: int = 0
     """0 = leaf chunk, 1 = cluster summary, 2 = top-level summary."""
 
@@ -47,14 +44,6 @@ class TextUnit:
     children_ids: list[str] = field(default_factory=list)
     """IDs of child nodes this summary was built from."""
 
-    # --- Graph linkage (filled in Step 3: entity extraction) ---
-    entity_ids: list[str] | None = None
-    """Entity IDs extracted from this chunk. Filled during entity extraction.
-    This is the forward link: chunk → entities."""
-
-    relationship_ids: list[str] | None = None
-    """Relationship IDs extracted from this chunk. Filled during entity extraction."""
-
     # --- Embedding (filled in Step 2) ---
     embedding: list[float] | None = None
     """Dense vector from text-embedding-3-small. 1536 dimensions."""
@@ -63,21 +52,14 @@ class TextUnit:
     attributes: dict[str, Any] | None = None
     """Arbitrary metadata from the source (CSV columns, PDF page numbers, etc.)."""
 
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize for storage/indexing."""
-        return {
-            "id": self.id,
-            "text": self.text,
-            "original_text": self.original_text,
-            "document_id": self.document_id,
-            "source": self.source,
-            "title": self.title,
-            "n_tokens": self.n_tokens,
-            "level": self.level,
-            "parent_id": self.parent_id,
-            "children_ids": self.children_ids,
-            "entity_ids": self.entity_ids,
-            "relationship_ids": self.relationship_ids,
-            "attributes": self.attributes,
-            # embedding intentionally excluded — stored in Qdrant, not serialized
-        }
+    context: str | None = None
+    """Additional context about the chunk, e.g., surrounding text, section headers, etc."""
+    
+    document_section: str | None = None
+    """The section of the document this chunk came from, if applicable (e.g., "Introduction")."""
+
+    chunk_role: str | None = None
+    """The role of the chunk within the document (e.g., "summary", "body")."""
+
+    entities: list[str] | None = None
+    """List of named entities found in the chunk."""

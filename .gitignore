@@ -219,7 +219,12 @@ azure_setup.md
 
 # notwithstanding data
 ingestion/data
+ingestion/storage
 
-node_modules
 package-lock.json
 package.json
+store/.DS_Store
+src/.DS_Store
+retrieval/.DS_Store
+
+.DS_Store

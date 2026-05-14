@@ -15,16 +15,7 @@ from typing import Any
 from qdrant_client import QdrantClient, models
 from fastembed import SparseTextEmbedding
 from openai import OpenAI
-import os
-import sys
 
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
-print(f"Current dir: {CURRENT_DIR} and project root: {PROJECT_ROOT}")
-
-if PROJECT_ROOT not in sys.path:
-    sys.path.append(PROJECT_ROOT)
-    
 from config import TREXConfig
 from store.vector_store import QdrantManager
 
@@ -55,25 +46,22 @@ class QdrantRetriever:
         """
         top_k = top_k or self.config.top_k
 
-        # Embed query (dense)
         dense_response = self.openai.embeddings.create(
             model=self.config.embedding_model,
             input=query,
         )
         dense_vector = dense_response.data[0].embedding
 
-        # Encode query (sparse / BM25)
         sparse_list = list(self.sparse_model.embed([query]))
         sparse_vector = sparse_list[0]
 
-        # Hybrid search with RRF fusion
         results = self.client.query_points(
             collection_name=self.config.qdrant_collection,
             prefetch=[
                 models.Prefetch(
                     query=dense_vector,
                     using=QdrantManager.DENSE_VECTOR_NAME,
-                    limit=top_k * 2,   # oversample for better RRF
+                    limit=top_k * 2,
                 ),
                 models.Prefetch(
                     query=models.SparseVector(
@@ -88,7 +76,6 @@ class QdrantRetriever:
             limit=top_k,
         )
 
-        # Convert to plain dicts
         retrieved = []
         for point in results.points:
             result = {

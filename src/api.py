@@ -4,18 +4,17 @@ Streams responses via SSE (Server-Sent Events).
 Serves frontend as static files.
 Authenticates users via Microsoft Azure Entra ID (OAuth 2.0 PKCE).
 
-Usage:
-    uvicorn api:app --reload --port 8080
-
 Environment variables required:
     AZURE_CLIENT_ID       — App registration client ID
     AZURE_TENANT_ID       — Your Azure AD tenant ID
     AZURE_REDIRECT_URI    — e.g. http://localhost:8080/auth/callback
-    SESSION_SECRET        — Random secret for signing session cookies
     MCP_SCRIPT            — Path to trex_mcp_server.py
-    OPENAI_QUERY_API_KEY  — OpenAI API key
+    OPENAI_API_KEY        — OpenAI API key
     OPENAI_ENDPOINT       — OpenAI base URL
     AGENT_MODEL           — Model name (default: gpt-4o)
+
+Usage:
+    uvicorn src.api:app --reload --port 8080
 """
 
 from __future__ import annotations
@@ -57,7 +56,8 @@ print(f"Current dir: {CURRENT_DIR} and project root: {PROJECT_ROOT}")
 if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 
-from src.helper import SYSTEM_PROMPT, RESPONSE_403, _error_page
+from src.utils.helper import RESPONSE_403, _error_page
+from src.agent import SYSTEM_PROMPT
 
 load_dotenv()
 
@@ -170,13 +170,17 @@ class ChatRequest(BaseModel):
 async def lifespan(app: FastAPI):
     global agent, mcp_client, memory
 
-    mcp_script = os.getenv("MCP_SCRIPT", "src/trex_mcp_server.py")
     model_name  = os.getenv("AGENT_MODEL", "gpt-4o")
 
     server_config = {
         "trex": {
-            "command": sys.executable,
-            "args": [mcp_script],
+            "command": os.getenv("PYTHON_SCRIPT"),
+            "args": [os.getenv("TREX_SERVER_SCRIPT")],
+            "transport": "stdio",
+        },
+        "scraper": {
+            "command": os.getenv("PYTHON_SCRIPT"),
+            "args": [os.getenv("SCRAPER_SERVER_SCRIPT")],
             "transport": "stdio",
         }
     }
@@ -188,7 +192,7 @@ async def lifespan(app: FastAPI):
     llm = ChatOpenAI(
         model=model_name,
         temperature=0,
-        api_key=os.getenv("OPENAI_QUERY_API_KEY"),
+        api_key=os.getenv("OPENAI_API_KEY"),
         base_url=os.getenv("OPENAI_ENDPOINT"),
     )
 

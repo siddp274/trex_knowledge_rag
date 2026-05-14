@@ -25,17 +25,7 @@ from langchain_community.document_loaders import (
     UnstructuredMarkdownLoader,
     BSHTMLLoader,
 )
-import os
-import sys
 
-# Get absolute path of current file
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
-
-# Add to sys.path
-if PROJECT_ROOT not in sys.path:
-    sys.path.append(PROJECT_ROOT)
-    
 from ingestion.hashing import gen_sha512_hash
 
 
@@ -79,15 +69,8 @@ def load_single_source(source: str) -> list[dict[str, Any]]:
         if not text or not text.strip():
             continue
 
-        title = (
-            doc.metadata.get("title")
-            or doc.metadata.get("source", "")
-            or Path(source).stem
-        )
-
         documents.append({
-            "id": gen_sha512_hash({"text": text}, ["text"]),
-            "title": title,
+            "title": doc.metadata.get("title", "Text not found at source"),
             "text": text,
             "source": source,
             "creation_date": doc.metadata.get("creation_date", ""),
