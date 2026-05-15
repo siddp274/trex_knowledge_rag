@@ -26,8 +26,8 @@ class TREXConfig:
     qdrant_api_key: str = os.getenv("QDRANT_API_KEY", "my_api_key")
     qdrant_auto_create: bool = True
 
-    chunk_size: int = 1000 # tokens
-    chunk_overlap: int = 150 # 15% overlap
+    chunk_size: int = 450 # tokens
+    chunk_overlap: int = 90 # 20% overlap
     prepend_metadata: list[str] = field(default_factory=lambda: ["title"])
 
     max_tree_levels: int = 2  # As per the paper, level/depth 3 onwards we get marginal performance gains.

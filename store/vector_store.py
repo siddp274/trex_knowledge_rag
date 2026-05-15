@@ -49,16 +49,19 @@ class QdrantManager:
         if config.qdrant_auto_create:
             self._ensure_collection()
 
-    def _ensure_collection(self):
-        """Create collection if it doesn't exist. Skip if it does."""
-        existing = [c.name for c in self.client.get_collections().collections]
-
-        if self.config.qdrant_collection in existing:
+    def _ensure_collection(self) -> dict:
+        """Ensure and then create collection if it doesn't exist. Skip if it does."""
+        col = self.collection_exists()
+        if col != None:
             logger.info(
                 f"[Qdrant] Collection '{self.config.qdrant_collection}' "
                 f"already exists — reusing"
             )
-            return
+            return {
+                    "collection": self.config.qdrant_collection, # has name in str
+                    "points": col.points_count,
+                    "status": col.status.value if col.status else "unknown",
+                }
 
         logger.info(
             f"[Qdrant] Collection '{self.config.qdrant_collection}' "
@@ -86,7 +89,20 @@ class QdrantManager:
     def collection_exists(self) -> bool:
         """Check if the configured collection exists."""
         existing = [c.name for c in self.client.get_collections().collections]
-        return self.config.qdrant_collection in existing
+        return self.client.get_collection(self.config.qdrant_collection) if self.config.qdrant_collection in existing else None
+    
+    def collection_list(self) -> list[str]:
+        """List all collections in Qdrant."""
+        collections = self.client.get_collections().collections
+        collection_info = []
+        for col in collections:
+            info = self.client.get_collection(col.name)
+            collection_info.append({
+                "collection": col.name,
+                "points": info.points_count,
+                "status": info.status.value if info.status else "unknown",
+            })
+        return collection_info
 
     def delete_collection(self):
         """Delete the collection. Useful for full re-indexing."""

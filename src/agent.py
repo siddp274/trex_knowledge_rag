@@ -29,6 +29,8 @@ from langchain.agents import create_agent
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
+from src.prompt import SYSTEM_PROMPT
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s — %(message)s",
@@ -37,52 +39,10 @@ logger = logging.getLogger("trex_agent")
 
 load_dotenv()
 
-SYSTEM_PROMPT = """\
-You are an expert research assistant with access to a GraphRAG Entity Knowledge Graph — \
-a hybrid TREX vector + graph index built from different sources of truth documents.
-
-You have the following tools:
-
-**Querying the knowledge base:**
-• **trex_retrieve** — Retrieve raw passages without generating an answer. \
-  Use when you need to examine source material yourself or compare passages.
-• **trex_status** — Check the knowledge base status (collection size, graph \
-  layer active, etc.).
-  entity_neo4j_status — Check the Neo4j graph status.
-
-**Web & transcript tools and resources:**
-• **info://youtranscripts_dom** - a reference resource about youtranscripts.com, a freference to call the tool trex_get_youtube_transcript \
-• **trex_get_youtube_transcript** — Fetch a YouTube video's transcript via \
-  youtranscripts.com and save it as a .txt file. Pass a YouTube URL or video ID. \
-  Returns the saved file path.
-
-**Indexing pipeline:**
-• **trex_run_pipeline** — Run the full TREX indexing pipeline on source files \
-  (ingest → embed → optional graph extraction → RAPTOR tree → Qdrant index). \
-  Use this after saving transcripts to build a searchable knowledge base from them.
-
-Typical workflow for adding new video content (if user later wants to add it to the knowledge base (info vector db + entity knowledge db):
-1. Use trex_status and entity_neo4j_status to check current knowledge base status and graph status.
-2. Use trex_get_youtube_transcript to fetch and save transcript(s). Before starting always ask the user if the video is in English or other launguage.
-3. Use trex_run_pipeline with the saved file path(s) as sources. Ask the user if they want to create the entity graph or not. And ask if user
-wants to providde their own collection name for trex or use the default one.
-4. Use trex_retrieve to answer questions about the content.
-
-Guidelines:
-1. Always ground your answers in the retrieved knowledge. If the knowledge \
-   base doesn't contain relevant information, say so clearly.
-2. When the user asks for comparison or analysis, use trex_retrieve to pull \
-   passages and reason over them yourself.
-3. Cite sources when possible (document title, section).
-4. If the user's question is ambiguous, ask for clarification before querying.
-5. Maintain conversation context — refer back to previous answers when relevant.
-6. You can't run more than 5 concurrent tool calls, so use them judiciously. Always prefer retrieval over 
-running the full pipeline, unless the user explicitly wants to add new content.
-"""
-
 async def build_agent(
-    trex_mcp_server_script: str = "trex_mcp_server.py",
-    scraper_mcp_server_script: str = "scraper_server.py",
+    trex_mcp_server_script: str = "src/trex_mcp_server.py",
+    youtube_mcp_server_script: str = "src/youtube_mcp_server.py",
+    scraper_mcp_server_script: str = "src/scraper_server.py",
     mcp_http_url: Optional[str] = None,
     model_name: str = "gpt-4o",
     server_config_override: Optional[dict] = None,
@@ -91,13 +51,13 @@ async def build_agent(
     Build and return the LangGraph agent with MCP tools loaded.
 
     Args:
-        trex_mcp_server_script: Path to the TREX MCP server script (stdio transport).
+        trex_mcp_server_script:    Path to the TREX MCP server script (stdio transport).
+        youtube_mcp_server_script: Path to the YouTube MCP server script (stdio transport).
         scraper_mcp_server_script: Path to the scraper MCP server script (stdio transport).
-        mcp_http_url: URL of a running MCP HTTP server (overrides script).
-        model_name: OpenAI model for the agent.
-        server_config_override: Full server config dict for MultiServerMCPClient.
-            When provided, mcp_server_script and mcp_http_url are ignored.
-            Used by api.py to wire both the trex and scraper MCP servers.
+        mcp_http_url:              URL of a running MCP HTTP server (overrides scripts).
+        model_name:                OpenAI model for the agent.
+        server_config_override:    Full server config dict for MultiServerMCPClient.
+                                   When provided, all script args and mcp_http_url are ignored.
 
     Returns:
         (agent, mcp_client, memory)
@@ -118,11 +78,16 @@ async def build_agent(
                 "args": [trex_mcp_server_script],
                 "transport": "stdio",
             },
+            "youtube": {
+                "command": os.getenv("MCP_SCRIPT"),
+                "args": [youtube_mcp_server_script],
+                "transport": "stdio",
+            },
             "scraper": {
                 "command": os.getenv("MCP_SCRIPT"),
                 "args": [scraper_mcp_server_script],
                 "transport": "stdio",
-            }
+            },
         }
 
     mcp_client = MultiServerMCPClient(server_config)
@@ -149,8 +114,9 @@ async def build_agent(
 
 
 async def chat_loop(
-    trex_mcp_server_script: str = "trex_mcp_server.py",
-    scraper_mcp_server_script: str = "scraper_server.py",
+    trex_mcp_server_script: str = "src/trex_mcp_server.py",
+    youtube_mcp_server_script: str = "src/youtube_mcp_server.py",
+    scraper_mcp_server_script: str = "src/scraper_server.py",
     mcp_http_url: Optional[str] = None,
     model_name: str = "gpt-4o",
 ):
@@ -158,6 +124,7 @@ async def chat_loop(
 
     agent, mcp_client, memory = await build_agent(
         trex_mcp_server_script=trex_mcp_server_script,
+        youtube_mcp_server_script=youtube_mcp_server_script,
         scraper_mcp_server_script=scraper_mcp_server_script,
         mcp_http_url=mcp_http_url,
         model_name=model_name,

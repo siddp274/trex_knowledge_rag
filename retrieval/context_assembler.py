@@ -14,6 +14,7 @@ from typing import Any
 import tiktoken
 
 from config import TREXConfig
+from retrieval.qdrant_retrieval import QdrantRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ class ContextAssembler:
     def assemble(
         self,
         qdrant_results: list[dict[str, Any]],
-        max_context_tokens: int = 3500,
+        max_context_tokens: int = 1650,
     ) -> dict[str, Any]:
         """
         Assemble final context for the answer generation prompt.
@@ -64,25 +65,56 @@ class ContextAssembler:
 
         logger.info(
             f"[Context] Assembled: {len(passages)} passages ({tokens_used} tokens). "
-            f"Levels used: {levels_used}"
         )
 
         return {
             "passages_text": passages_text,
             "total_tokens": tokens_used,
             "num_passages": len(passages),
-            "levels_used": levels_used,
         }
 
     def _format_passage(self, result: dict[str, Any], index: int) -> str:
         """Format a single retrieved node as a labeled passage."""
-        level = result.get("level", 0)
+        level = result.get("raptor_tree_node_level", 0)
         level_label = "Raw Chunk" if level == 0 else f"Level-{level} Summary"
-        source = result.get("source", "unknown")
         text = result.get("original_text", result.get("text", ""))
-        return f"[Passage {index} | {level_label} | Source: {source}]\n{text}"
+        score = result.get("score", 0)
+        context = result.get("context")
+        document_section = result.get("document_section")
+        chunk_role = result.get("chunk_role")
+        entities = result.get("entities")
+        return f"""[Passage {index} \n Original Text: {text} \n RAPTOR tree level {level_label} \n 
+                Document Section: {document_section} \n Chunk Role: {chunk_role} \n 
+                Entities: {entities} \n RRF Retrieval Score: {score}]\n
+    """
 
     def _count_tokens(self, text: str) -> int:
         if not text:
             return 0
         return len(self.encoder.encode(text))
+    
+class QueryPipeline:
+    def __init__(self, config: TREXConfig):
+        self.config = config
+        self.qdrant_retriever = QdrantRetriever(config)
+        self.context_assembler = ContextAssembler(config)
+
+    def _retrieve_context(
+        self,
+        question: str,
+        top_k: int | None,
+        max_context_tokens: int,
+    ) -> list[str]:
+        """
+        Shared retrieval logic for query() and query_stream().
+
+        Returns:
+            (qdrant_results, assembled_context)
+        """
+        qdrant_results = self.qdrant_retriever.search(question, top_k=top_k)
+        assembled = self.context_assembler.assemble(
+            qdrant_results=qdrant_results,
+            max_context_tokens=max_context_tokens,
+        )
+        return assembled
+

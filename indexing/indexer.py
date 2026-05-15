@@ -62,11 +62,6 @@ class QdrantIndexer:
         collection = self.config.qdrant_collection
         total = len(nodes)
 
-        level_counts = {}
-        for node in nodes:
-            level_counts[node.level] = level_counts.get(node.level, 0) + 1
-        logger.info(f"[Qdrant] Indexing {total} nodes into '{collection}' (by level: {level_counts})")
-
         for i in range(0, total, batch_size):
             batch = nodes[i : i + batch_size]
             self.client.upsert(
@@ -105,6 +100,10 @@ class QdrantIndexer:
                 "parent_id": node.parent_id,
                 "children_ids": node.children_ids,
                 "n_tokens": node.n_tokens,
+                "context": node.context,
+                "document_section": node.document_section,
+                "chunk_role": node.chunk_role,
+                "entities": node.entities,
             }
             point = models.PointStruct(
                 id=point_id,

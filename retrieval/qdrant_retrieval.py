@@ -79,19 +79,19 @@ class QdrantRetriever:
         retrieved = []
         for point in results.points:
             result = {
-                **point.payload,
-                "score": point.score,
+                # "text": point.payload["text"],
+                "context": point.payload.get("context"),
+                "document_section": point.payload.get("document_section"),
+                "chunk_role": point.payload.get("chunk_role"),
+                "entities": point.payload.get("entities"),
+                "original_text": point.payload["original_text"],
+                "raptor_tree_node_level": point.payload["level"],
+                "score": round(point.score, 4),
             }
             retrieved.append(result)
 
-        level_counts = {}
-        for r in retrieved:
-            lvl = r.get("level", 0)
-            level_counts[lvl] = level_counts.get(lvl, 0) + 1
-
         logger.info(
             f"[Qdrant] Retrieved {len(retrieved)} nodes "
-            f"(by level: {level_counts})"
         )
 
         return retrieved

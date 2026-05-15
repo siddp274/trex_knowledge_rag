@@ -10,6 +10,7 @@ Key difference from LangChain's RecursiveCharacterTextSplitter:
 from collections.abc import Callable
 from dataclasses import dataclass
 import json
+import os
 from openai import OpenAI
 from typing import Any, Optional
 
@@ -92,7 +93,7 @@ class TokenChunker:
         raw_chunks = self._split_on_tokens(text)
         results = []
         transform = build_transformer(doc=text, enrich_fn=enrich_chunk, 
-                                      count_tokens_fn=self.count_tokens)
+                                      count_tokens=self.count_tokens)
         
         for i, chunk_text in enumerate(raw_chunks):
             transform_chunk = {
@@ -102,8 +103,8 @@ class TokenChunker:
                 "index": i,
             }
             if set_transform:
-                transform_chunk = transform(chunk_text)
-                transform_chunk["index"] = i
+                # hitting 429, need to rate limit these calls or make them async and batch them
+                transform_chunk = transform(chunk_text, i)
 
             results.append(transform_chunk)
 
@@ -152,7 +153,7 @@ Return ONLY valid JSON (no markdown, no explanation).
 
 Schema:
 {
-  "context": "string (50–100 tokens explaining what the chunk is about and its role in the document)",
+  "context": "string (40-60 tokens explaining what the chunk is about and its role in the document)",
   "document_section": "string (section or subsection name) if not present create your own based on the content",
   "chunk_role": "string (definition | evidence | conclusion | example | argument | other)",
   "entities": List["string"]
@@ -165,7 +166,7 @@ Rules:
 """
 
     user_prompt = f"""Document: {doc} Chunk:{text}"""
-    client = OpenAI()
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_ENDPOINT"))
     response = client.chat.completions.create(
         model="gpt-4.1-nano",
         messages=[

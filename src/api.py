@@ -54,10 +54,10 @@ PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
 print(f"Current dir: {CURRENT_DIR} and project root: {PROJECT_ROOT}")
 
 if PROJECT_ROOT not in sys.path:
-    sys.path.append(PROJECT_ROOT)
+    sys.path.insert(0, PROJECT_ROOT)
 
 from src.utils.helper import RESPONSE_403, _error_page
-from src.agent import SYSTEM_PROMPT
+from src.prompt import SYSTEM_PROMPT
 
 load_dotenv()
 
@@ -176,6 +176,11 @@ async def lifespan(app: FastAPI):
         "trex": {
             "command": os.getenv("PYTHON_SCRIPT"),
             "args": [os.getenv("TREX_SERVER_SCRIPT")],
+            "transport": "stdio",
+        },
+        "youtube": {
+            "command": os.getenv("PYTHON_SCRIPT"),
+            "args": [os.getenv("YOUTUBE_SERVER_SCRIPT")],
             "transport": "stdio",
         },
         "scraper": {
